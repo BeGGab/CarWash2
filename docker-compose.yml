@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: carwash
+      POSTGRES_DB: carwash
+      POSTGRES_PASSWORD: 123456
+    ports:
+      - 5432:5432
