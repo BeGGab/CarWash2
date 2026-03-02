@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
-import "./styles.css";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000";
+import "./index.css";
+import { BACKEND_URL } from "./api";
 
 declare global {
   interface Window {
@@ -41,11 +40,15 @@ type BlockedSlot = {
 
 export const AdminCarwashApp: React.FC = () => {
   const [telegramId, setTelegramId] = useState<number | null>(null);
+  const [telegramCheckDone, setTelegramCheckDone] = useState(false);
   const [carwashes, setCarwashes] = useState<CarWash[]>([]);
+  const [loadingCarwashes, setLoadingCarwashes] = useState(true);
   const [services, setServices] = useState<Service[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [editingServiceId, setEditingServiceId] = useState<number | null>(null);
+  const [editService, setEditService] = useState({ name: "", price: "", duration_minutes: 60 });
 
   const [newCarwash, setNewCarwash] = useState({
     name: "",
@@ -74,20 +77,23 @@ export const AdminCarwashApp: React.FC = () => {
     const fromUrl = Number(new URLSearchParams(window.location.search).get("telegram_id"));
     if (fromUrl) {
       setTelegramId(fromUrl);
+      setTelegramCheckDone(true);
       return;
     }
-    const tg = window.Telegram?.WebApp;
-    if (tg?.initDataUnsafe?.user?.id) {
-      setTelegramId(tg.initDataUnsafe.user.id);
-      tg.ready?.();
-    } else {
-      const t = setTimeout(() => {
-        if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-          setTelegramId(window.Telegram.WebApp.initDataUnsafe.user.id);
-        }
-      }, 300);
-      return () => clearTimeout(t);
-    }
+    const readTelegram = () => {
+      const tg = window.Telegram?.WebApp;
+      if (tg?.initDataUnsafe?.user?.id) {
+        setTelegramId(tg.initDataUnsafe.user.id);
+        tg.ready?.();
+        setTelegramCheckDone(true);
+        return true;
+      }
+      return false;
+    };
+    if (readTelegram()) return;
+    const t1 = setTimeout(() => { if (readTelegram()) return; setTelegramCheckDone(true); }, 500);
+    const t2 = setTimeout(() => { readTelegram(); setTelegramCheckDone(true); }, 1500);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   useEffect(() => {
@@ -98,12 +104,15 @@ export const AdminCarwashApp: React.FC = () => {
 
   async function loadCarwashes() {
     if (!telegramId) return;
+    setLoadingCarwashes(true);
     setError(null);
     const res = await fetch(
       `${BACKEND_URL}/api/admin/carwashes/me?telegram_id=${telegramId}`
     );
+    setLoadingCarwashes(false);
     if (!res.ok) {
       setError("Не удалось загрузить ваши автомойки");
+      setCarwashes([]);
       return;
     }
     const data = (await res.json()) as CarWash[];
@@ -208,7 +217,59 @@ export const AdminCarwashApp: React.FC = () => {
       setError("Не удалось добавить услугу");
       return;
     }
+    setNewService({ name: "", price: "", duration_minutes: 60 });
     await loadServices(carwashes[0].id);
+  }
+
+  function startEditService(s: Service) {
+    setEditingServiceId(s.id);
+    setEditService({
+      name: s.name,
+      price: String(s.price),
+      duration_minutes: s.duration_minutes,
+    });
+  }
+
+  function cancelEditService() {
+    setEditingServiceId(null);
+  }
+
+  async function saveEditService(e: React.FormEvent) {
+    e.preventDefault();
+    if (!telegramId || editingServiceId == null) return;
+    setError(null);
+    const body: Record<string, unknown> = {};
+    if (editService.name.trim()) body.name = editService.name.trim();
+    if (editService.price !== "") body.price = Number(editService.price);
+    body.duration_minutes = editService.duration_minutes;
+    const res = await fetch(
+      `${BACKEND_URL}/api/admin/services/${editingServiceId}?telegram_id=${telegramId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!res.ok) {
+      setError("Не удалось сохранить услугу");
+      return;
+    }
+    setEditingServiceId(null);
+    if (carwashes[0]) await loadServices(carwashes[0].id);
+  }
+
+  async function deleteService(serviceId: number) {
+    if (!telegramId) return;
+    if (!confirm("Удалить услугу?")) return;
+    const res = await fetch(
+      `${BACKEND_URL}/api/admin/services/${serviceId}?telegram_id=${telegramId}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      setError("Не удалось удалить услугу");
+      return;
+    }
+    if (carwashes[0]) await loadServices(carwashes[0].id);
   }
 
   async function completeBooking(id: number) {
@@ -288,7 +349,18 @@ export const AdminCarwashApp: React.FC = () => {
       <h1>Кабинет автомойки</h1>
       {error && <p className="error">{error}</p>}
 
-      {!carwashes.length && (
+      {!telegramCheckDone && !telegramId && (
+        <p className="text-gray-500 py-4">Загрузка…</p>
+      )}
+      {telegramCheckDone && !telegramId && (
+        <p className="text-gray-500 py-4">Откройте приложение из Telegram или укажите в адресе: ?telegram_id=ВАШ_ID</p>
+      )}
+
+      {telegramId && loadingCarwashes && (
+        <p className="text-gray-500 py-4">Загрузка ваших моек…</p>
+      )}
+
+      {telegramId && !loadingCarwashes && !carwashes.length && !error && (
         <form onSubmit={createCarwash} className="card">
           <h2>Регистрация автомойки</h2>
           <input
@@ -372,9 +444,50 @@ export const AdminCarwashApp: React.FC = () => {
           <div className="card">
             <h3>Услуги</h3>
             {services.map((s) => (
-              <p key={s.id}>
-                {s.name} — {s.price} ₽, {s.duration_minutes} мин
-              </p>
+              <div key={s.id} className="border-b border-gray-100 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
+                {editingServiceId === s.id ? (
+                  <form onSubmit={saveEditService} className="flex flex-wrap gap-2 items-end">
+                    <input
+                      placeholder="Название"
+                      value={editService.name}
+                      onChange={(e) => setEditService({ ...editService, name: e.target.value })}
+                      className="flex-1 min-w-[120px]"
+                    />
+                    <input
+                      placeholder="Цена, ₽"
+                      type="number"
+                      value={editService.price}
+                      onChange={(e) => setEditService({ ...editService, price: e.target.value })}
+                      className="w-24"
+                    />
+                    <input
+                      placeholder="Мин"
+                      type="number"
+                      value={editService.duration_minutes}
+                      onChange={(e) =>
+                        setEditService({ ...editService, duration_minutes: Number(e.target.value) })
+                      }
+                      className="w-20"
+                    />
+                    <button type="submit" className="btn-primary py-2 px-3 text-sm">Сохранить</button>
+                    <button type="button" onClick={cancelEditService} className="btn-secondary py-2 px-3 text-sm">
+                      Отмена
+                    </button>
+                  </form>
+                ) : (
+                  <p className="flex items-center justify-between gap-2 flex-wrap">
+                    <span>{s.name} — {s.price} ₽, {s.duration_minutes} мин</span>
+                    <span>
+                      <button type="button" onClick={() => startEditService(s)} className="text-wash-primary text-sm mr-2">
+                        Изменить
+                      </button>
+                      <button type="button" onClick={() => deleteService(s.id)} className="text-red-600 text-sm">
+                        Удалить
+                      </button>
+                    </span>
+                  </p>
+                )}
+              </div>
             ))}
           </div>
 

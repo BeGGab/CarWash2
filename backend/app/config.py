@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -9,7 +9,23 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:5173"
 
+    @field_validator("backend_url", "frontend_url", mode="before")
+    @classmethod
+    def strip_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            v = v.strip().rstrip("/")
+        return v
+
+    # Доп. разрешённые origins для CORS (через запятую), например URL WebApp в Telegram
+    cors_extra_origins: str = ""
+
     database_url: str = "postgresql+asyncpg://carwash:123456@localhost:5432/carwash"
+
+    # Центральный город: геопозиция и радиус поиска от этой точки, если заданы системным администратором
+    default_city_name: Optional[str] = "Ростов на Дону"
+    default_city_lat: Optional[float] = 47.222109
+    default_city_lon: Optional[float] = 39.718813
+    default_radius_km: float = 25.0
 
     # Telegram / Bot
     telegram_bot_token: str = "YOUR_TELEGRAM_BOT_TOKEN"
@@ -20,8 +36,8 @@ class Settings(BaseSettings):
     refund_hours_before_start: int = 2
 
     # YooKassa
-    yookassa_shop_id: str = "YOUR_SHOP_ID"
-    yookassa_secret_key: str = "YOUR_SECRET_KEY"
+    yookassa_shop_id: str = "1290986"
+    yookassa_secret_key: str = "test_bzj7Xe4-acY1okaDXimKi3iaBGw4xQxFKXcA-5mKstY"
     yookassa_currency: str = "RUB"
 
     aggregator_commission_percent: float = 5.0

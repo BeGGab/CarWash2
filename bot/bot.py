@@ -34,14 +34,27 @@ def is_system_admin(telegram_id: int) -> bool:
     return telegram_id in settings.system_admin_telegram_ids
 
 
-async def get_user_role(telegram_id: int) -> Optional[str]:
-    """Возвращает роль пользователя: 'user' | 'carwash_admin' | 'system_admin' или None если не найден."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{API_BASE}/auth/me", params={"telegram_id": telegram_id})
-    if resp.status_code != 200:
-        return None
-    data = resp.json()
-    return data.get("role")
+# Таймаут для запросов к API (туннели могут отвечать медленно)
+HTTPX_TIMEOUT = 20.0
+
+
+async def get_user_role(telegram_id: int) -> tuple[Optional[str], Optional[str]]:
+    """
+    Возвращает (роль, ошибка).
+    Роль: 'user' | 'carwash_admin' | 'system_admin' или None если пользователь не зарегистрирован.
+    Ошибка: None, либо 'server_error' при 502/таймауте/сетевой ошибке (бэкенд недоступен).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
+            resp = await client.get(f"{API_BASE}/auth/me", params={"telegram_id": telegram_id})
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        return (None, "server_error")
+    if resp.status_code == 200:
+        data = resp.json()
+        return (data.get("role"), None)
+    if resp.status_code == 404:
+        return (None, None)
+    return (None, "server_error")
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -144,22 +157,28 @@ async def cmd_start(message: Message) -> None:
     if not message.from_user:
         return
     telegram_id = message.from_user.id
-    role = await get_user_role(telegram_id)
-    if role is None:
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Поделиться телефоном", request_contact=True)],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
+    role, err = await get_user_role(telegram_id)
+    if err == "server_error":
         await message.answer(
-            "Привет! Я агрегатор автомоек города.\n\n"
-            "Для начала работы поделитесь, пожалуйста, номером телефона.",
-            reply_markup=kb,
+            "Сервер временно недоступен. Проверьте подключение к интернету и попробуйте позже.\n\n"
+            "Если вы администратор: убедитесь, что бэкенд запущен и в .env указан правильный BACKEND_URL (адрес API)."
         )
         return
-    await send_menu_by_role(message, telegram_id, role)
+    if role is not None:
+        await send_menu_by_role(message, telegram_id, role)
+        return
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Поделиться телефоном", request_contact=True)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    await message.answer(
+        "Привет! Я агрегатор автомоек города.\n\n"
+        "Для начала работы поделитесь, пожалуйста, номером телефона.",
+        reply_markup=kb,
+    )
 
 
 @dp.message(F.contact)
@@ -187,10 +206,21 @@ async def handle_contact(message: Message) -> None:
         "full_name": full_name,
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{API_BASE}/auth/register", json=payload)
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
+            resp = await client.post(f"{API_BASE}/auth/register", json=payload)
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        await message.answer(
+            "Сервер недоступен. Убедитесь, что бэкенд запущен и в .env указан правильный BACKEND_URL (адрес API), а не адрес фронтенда."
+        )
+        return
     if resp.status_code != 200:
-        await message.answer("Ошибка регистрации. Попробуйте позже.")
+        if resp.status_code in (502, 503, 504):
+            await message.answer(
+                "Сервер временно недоступен (ошибка 502). Проверьте, что бэкенд запущен и BACKEND_URL в .env указывает на API, а не на фронтенд."
+            )
+        else:
+            await message.answer("Ошибка регистрации. Попробуйте позже.")
         return
     user = resp.json()
     role = user.get("role", "user")
@@ -207,7 +237,7 @@ async def handle_location(message: Message) -> None:
     lon = message.location.longitude
 
     params = {"lat": lat, "lon": lon, "radius_km": 10.0}
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(f"{API_BASE}/carwashes/nearby", params=params)
     if resp.status_code != 200:
         await message.answer("Ошибка при получении списка моек. Попробуйте позже.")
@@ -244,7 +274,7 @@ async def handle_location(message: Message) -> None:
 async def handle_my_carwashes(message: Message) -> None:
     if not message.from_user:
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(
             f"{API_BASE}/admin/carwashes/me",
             params={"telegram_id": message.from_user.id},
@@ -273,7 +303,7 @@ async def handle_my_carwashes(message: Message) -> None:
 async def handle_carwash_bookings(message: Message) -> None:
     if not message.from_user:
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(
             f"{API_BASE}/admin/bookings",
             params={"telegram_id": message.from_user.id},
@@ -315,7 +345,7 @@ async def handle_carwash_add_service(message: Message) -> None:
     if not message.from_user:
         return
     uid = message.from_user.id
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(
             f"{API_BASE}/admin/carwashes/me",
             params={"telegram_id": uid},
@@ -403,7 +433,7 @@ async def handle_pending_carwash_input(message: Message) -> None:
             _pending_carwash_action[uid] = "qr"
             await message.answer("Отправьте текст с QR-кода одним сообщением.", reply_markup=kb)
             return
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             resp = await client.get(
                 f"{API_BASE}/admin/bookings/by-qr/{text}",
                 params={"telegram_id": uid},
@@ -431,7 +461,7 @@ async def handle_pending_carwash_input(message: Message) -> None:
             _pending_carwash_action[uid] = "complete"
             await message.answer("Введите номер брони числом, например: 5", reply_markup=kb)
             return
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             resp = await client.post(
                 f"{API_BASE}/admin/bookings/{booking_id}/complete",
                 params={"telegram_id": uid},
@@ -504,7 +534,7 @@ async def handle_pending_carwash_input(message: Message) -> None:
                     "close_time": data["close_time"],
                     "slot_duration_minutes": 30,
                 }
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
                     resp = await client.post(
                         f"{API_BASE}/admin/carwashes",
                         params={"telegram_id": uid},
@@ -568,7 +598,7 @@ async def handle_pending_carwash_input(message: Message) -> None:
                     "price": data["price"],
                     "duration_minutes": data["duration_minutes"],
                 }
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
                     resp = await client.post(
                         f"{API_BASE}/admin/services",
                         params={"telegram_id": uid},
@@ -585,7 +615,7 @@ async def handle_pending_carwashes(message: Message) -> None:
     if not message.from_user or not is_system_admin(message.from_user.id):
         await message.answer("Доступ только для системного администратора.")
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(
             f"{API_BASE}/system/carwashes/pending",
             params={"telegram_id": message.from_user.id},
@@ -609,7 +639,7 @@ async def handle_statistics(message: Message) -> None:
     if not message.from_user or not is_system_admin(message.from_user.id):
         await message.answer("Доступ только для системного администратора.")
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(
             f"{API_BASE}/system/statistics/overview",
             params={"telegram_id": message.from_user.id},
@@ -657,7 +687,7 @@ async def cmd_add_carwash_admin(message: Message) -> None:
     except ValueError:
         await message.answer("Укажите числовой telegram_id пользователя.")
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.post(
             f"{API_BASE}/system/users/assign-carwash-admin",
             params={"telegram_id": message.from_user.id},
@@ -685,7 +715,7 @@ async def handle_my_bookings(message: Message) -> None:
     telegram_id = message.from_user.id
     params = {"telegram_id": telegram_id}
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.get(f"{API_BASE}/bookings/me", params=params)
 
     if resp.status_code != 200:
@@ -719,6 +749,27 @@ async def main() -> None:
         )
     else:
         logging.info("Системные администраторы: %s", sorted(settings.system_admin_telegram_ids))
+
+    # Проверка доступности бэкенда (избегаем 502 при запросах)
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
+            r = await client.get(f"{settings.backend_url.rstrip('/')}/health")
+        if r.status_code == 200:
+            logging.info("Бэкенд доступен: %s", settings.backend_url)
+        else:
+            logging.warning(
+                "Бэкенд вернул %s по адресу %s. Убедитесь, что туннель для BACKEND_URL ведёт на порт 8000 (uvicorn), а не на 5173 (фронт).",
+                r.status_code,
+                settings.backend_url,
+            )
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
+        logging.warning(
+            "Бэкенд недоступен (%s). BACKEND_URL=%s. "
+            "Для туннеля: поднимите отдельный туннель на порт 8000 (uvicorn), укажите его URL в .env как BACKEND_URL. Запустите uvicorn до запуска бота.",
+            e.__class__.__name__,
+            settings.backend_url,
+        )
+
     await dp.start_polling(bot)
 
 

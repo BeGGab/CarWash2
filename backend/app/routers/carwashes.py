@@ -7,7 +7,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_async_session
-from ..models import BlockedSlot, Booking, CarWash, WashType
+from ..models import BlockedSlot, Booking, BookingStatus, CarWash, WashType
 from ..schemas import CarWashRead, CarWashWithSlots, NearbyCarWashFilter, Slot
 
 router = APIRouter(prefix="/carwashes", tags=["carwashes"])
@@ -30,7 +30,7 @@ def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) ->
 async def get_nearby_carwashes(
     lat: float = Query(...),
     lon: float = Query(...),
-    radius_km: float = Query(10.0, ge=0.5, le=50.0),
+    radius_km: float = Query(25.0, ge=0.5, le=100.0),
     after_time: str | None = Query(None),
     wash_types: list[WashType] | None = Query(None),
     additional_services: list[str] | None = Query(None),
@@ -40,7 +40,8 @@ async def get_nearby_carwashes(
     result = await session.execute(stmt)
     carwashes: list[CarWash] = list(result.scalars().all())
 
-    filtered: list[CarWash] = []
+    # Сначала отбираем мойки в радиусе
+    in_radius: list[tuple[CarWash, float]] = []
     for cw in carwashes:
         d = haversine_distance_km(lat, lon, cw.lat, cw.lon)
         if d <= radius_km:
@@ -50,7 +51,24 @@ async def get_nearby_carwashes(
                 cw_services = set((cw.additional_services or []))
                 if not cw_services.intersection(additional_services):
                     continue
-            filtered.append(cw)
+            in_radius.append((cw, d))
+
+    # Если в радиусе ни одной — отдаём ближайшие по расстоянию (до 10), чтобы не показывать "Моек не найдено"
+    if not in_radius:
+        with_distance: list[tuple[CarWash, float]] = []
+        for cw in carwashes:
+            if wash_types and cw.wash_type not in wash_types:
+                continue
+            if additional_services:
+                cw_services = set((cw.additional_services or []))
+                if not cw_services.intersection(additional_services):
+                    continue
+            d = haversine_distance_km(lat, lon, cw.lat, cw.lon)
+            with_distance.append((cw, d))
+        with_distance.sort(key=lambda x: x[1])
+        in_radius = with_distance[:10]
+
+    filtered: list[CarWash] = [cw for cw, _ in in_radius]
 
     # Compute simple nearest free slots for today
     now = datetime.now()
@@ -140,3 +158,59 @@ async def get_carwash(carwash_id: int, session: AsyncSession = Depends(get_async
     if not carwash or not carwash.is_approved:
         raise HTTPException(status_code=404, detail="Car wash not found")
     return carwash
+
+
+@router.get("/{carwash_id}/slots", response_model=List[Slot])
+async def get_carwash_slots(
+    carwash_id: int,
+    date_str: str = Query(..., description="Date YYYY-MM-DD"),
+    session: AsyncSession = Depends(get_async_session),
+):
+    carwash = await session.get(CarWash, carwash_id)
+    if not carwash or not carwash.is_approved:
+        raise HTTPException(status_code=404, detail="Car wash not found")
+
+    try:
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+
+    start = carwash.open_time
+    end = carwash.close_time
+    slot_delta = timedelta(minutes=carwash.slot_duration_minutes)
+
+    current_dt = datetime.combine(slot_date, start)
+    end_dt = datetime.combine(slot_date, end)
+    slots: list[Slot] = []
+
+    while current_dt + slot_delta <= end_dt:
+        slot_start = current_dt.time()
+        slot_end = (current_dt + slot_delta).time()
+
+        booking_stmt = select(Booking).where(
+            and_(
+                Booking.carwash_id == carwash_id,
+                Booking.date == slot_date,
+                Booking.start_time == slot_start,
+                Booking.status != BookingStatus.CANCELLED,
+            )
+        )
+        booking_res = await session.execute(booking_stmt)
+        existing = booking_res.scalar_one_or_none()
+
+        blocked_stmt = select(BlockedSlot).where(
+            and_(
+                BlockedSlot.carwash_id == carwash_id,
+                BlockedSlot.date == slot_date,
+                BlockedSlot.start_time <= slot_start,
+                BlockedSlot.end_time >= slot_end,
+            )
+        )
+        blocked_res = await session.execute(blocked_stmt)
+        blocked = blocked_res.scalar_one_or_none()
+
+        is_available = existing is None and blocked is None
+        slots.append(Slot(start_time=slot_start, end_time=slot_end, is_available=is_available))
+        current_dt += slot_delta
+
+    return slots

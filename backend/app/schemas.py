@@ -56,6 +56,16 @@ class CarWashRead(CarWashBase):
         from_attributes = True
 
 
+class CarWashWithOwner(CarWashRead):
+    owner_telegram_id: Optional[int] = None
+    owner_full_name: Optional[str] = None
+    owner_phone: Optional[str] = None
+
+
+class CarWashSystemUpdate(BaseModel):
+    is_approved: Optional[bool] = None
+
+
 class ServiceBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -65,6 +75,13 @@ class ServiceBase(BaseModel):
 
 class ServiceCreate(ServiceBase):
     carwash_id: int
+
+
+class ServiceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    duration_minutes: Optional[int] = None
 
 
 class ServiceRead(ServiceBase):
@@ -102,6 +119,12 @@ class BookingRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BookingReadEnriched(BookingRead):
+    carwash_name: Optional[str] = None
+    carwash_address: Optional[str] = None
+    service_name: Optional[str] = None
 
 
 class PaymentCreate(BaseModel):

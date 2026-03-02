@@ -1,16 +1,19 @@
 import base64
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from ..config import settings
 from ..db import get_async_session
-from ..models import Booking, BookingStatus, Payment, PaymentStatus, Refund, RefundStatus
+from ..models import Booking, BookingStatus, Payment, PaymentStatus, Refund, RefundStatus, User
 from ..schemas import PaymentCreate, PaymentRead, RefundCreate, RefundRead
 from ..services.refund_service import create_refund as do_create_refund
+from ..services.reminder_scheduler import add_reminder
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -120,6 +123,20 @@ async def yookassa_webhook(request: Request, session: AsyncSession = Depends(get
         payment.raw_response = payment_data
         if booking:
             booking.status = BookingStatus.PAID
+            await session.flush()
+            # Напоминание клиенту за 24 часа до записи (если запись больше чем за 24 ч)
+            await session.refresh(booking, ["user"])
+            user = booking.user
+            if user and user.telegram_id:
+                booking_start = datetime.combine(booking.date, booking.start_time)
+                run_at = booking_start - timedelta(hours=24)
+                if run_at > datetime.utcnow():
+                    time_str = (
+                        booking.start_time.strftime("%H:%M")
+                        if hasattr(booking.start_time, "strftime")
+                        else str(booking.start_time)[:5]
+                    )
+                    add_reminder(booking.id, run_at, user.telegram_id, time_str)
     elif event == "payment.canceled":
         payment.status = PaymentStatus.CANCELED
         payment.raw_response = payment_data

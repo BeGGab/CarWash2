@@ -16,6 +16,7 @@ from ..schemas import (
     CarWashRead,
     ServiceCreate,
     ServiceRead,
+    ServiceUpdate,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin-carwash"])
@@ -100,6 +101,56 @@ async def create_service(
     await session.commit()
     await session.refresh(service)
     return service
+
+
+@router.patch("/services/{service_id}", response_model=ServiceRead)
+async def update_service(
+    service_id: int,
+    payload: ServiceUpdate,
+    telegram_id: int,
+    session: AsyncSession = Depends(get_async_session),
+):
+    user = await _get_user_by_telegram_id(session, telegram_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    service = await session.get(Service, service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+
+    carwash = await session.get(CarWash, service.carwash_id)
+    if not carwash or carwash.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(service, k, v)
+    await session.commit()
+    await session.refresh(service)
+    return service
+
+
+@router.delete("/services/{service_id}")
+async def delete_service(
+    service_id: int,
+    telegram_id: int,
+    session: AsyncSession = Depends(get_async_session),
+):
+    user = await _get_user_by_telegram_id(session, telegram_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    service = await session.get(Service, service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+
+    carwash = await session.get(CarWash, service.carwash_id)
+    if not carwash or carwash.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    await session.delete(service)
+    await session.commit()
+    return {"status": "ok"}
 
 
 @router.post("/blocked-slots", response_model=BlockedSlotRead)

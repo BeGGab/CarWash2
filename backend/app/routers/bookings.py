@@ -9,8 +9,10 @@ from sqlalchemy.orm import joinedload
 from ..config import settings
 from ..db import get_async_session
 from ..models import Booking, BookingStatus, CarWash, PaymentStatus, Service, User
-from ..schemas import BookingCreate, BookingRead
+from ..schemas import BookingCreate, BookingRead, BookingReadEnriched
 from ..services.refund_service import create_refund as do_create_refund
+from ..services.reminder_scheduler import remove_reminder
+from ..services.telegram_sender import send_telegram_message
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
@@ -69,10 +71,25 @@ async def create_booking(
     session.add(booking)
     await session.commit()
     await session.refresh(booking)
+
+    # Уведомление админу мойки о новой брони
+    owner = await session.get(User, carwash.owner_id)
+    if owner and owner.telegram_id:
+        time_str = (
+            payload.start_time.strftime("%H:%M")
+            if hasattr(payload.start_time, "strftime")
+            else str(payload.start_time)[:5]
+        )
+        msg = (
+            f"Новая бронь №{booking.id}: {carwash.name}, "
+            f"{payload.date} {time_str}, услуга «{service.name}»."
+        )
+        await send_telegram_message(owner.telegram_id, msg)
+
     return booking
 
 
-@router.get("/me", response_model=list[BookingRead])
+@router.get("/me", response_model=list[BookingReadEnriched])
 async def list_my_bookings(
     telegram_id: int,
     session: AsyncSession = Depends(get_async_session),
@@ -81,17 +98,46 @@ async def list_my_bookings(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    stmt = select(Booking).where(Booking.user_id == user.id).order_by(Booking.created_at.desc())
+    stmt = (
+        select(Booking)
+        .where(Booking.user_id == user.id)
+        .options(joinedload(Booking.carwash), joinedload(Booking.service))
+        .order_by(Booking.created_at.desc())
+    )
     res = await session.execute(stmt)
-    return list(res.scalars().all())
+    bookings = list(res.unique().scalars().all())
+    result = []
+    for b in bookings:
+        base = BookingRead.model_validate(b)
+        result.append(
+            BookingReadEnriched(
+                **base.model_dump(),
+                carwash_name=b.carwash.name if b.carwash else None,
+                carwash_address=b.carwash.address if b.carwash else None,
+                service_name=b.service.name if b.service else None,
+            )
+        )
+    return result
 
 
-@router.get("/{booking_id}", response_model=BookingRead)
+@router.get("/{booking_id}", response_model=BookingReadEnriched)
 async def get_booking(booking_id: int, session: AsyncSession = Depends(get_async_session)):
-    booking = await session.get(Booking, booking_id)
+    stmt = (
+        select(Booking)
+        .where(Booking.id == booking_id)
+        .options(joinedload(Booking.carwash), joinedload(Booking.service))
+    )
+    res = await session.execute(stmt)
+    booking = res.unique().scalar_one_or_none()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    return booking
+    base = BookingRead.model_validate(booking)
+    return BookingReadEnriched(
+        **base.model_dump(),
+        carwash_name=booking.carwash.name if booking.carwash else None,
+        carwash_address=booking.carwash.address if booking.carwash else None,
+        service_name=booking.service.name if booking.service else None,
+    )
 
 
 @router.post("/{booking_id}/cancel", response_model=BookingRead)
@@ -137,6 +183,7 @@ async def cancel_booking(
 
     booking.status = BookingStatus.CANCELLED
     booking.canceled_at = now
+    remove_reminder(booking_id)
     await session.commit()
     await session.refresh(booking)
     return booking
