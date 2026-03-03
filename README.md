@@ -87,7 +87,9 @@ python -m bot.bot
 
 В BotFather (или в настройках кнопки бота) укажите **URL Web App** = адрес, по которому открывается **фронт** (то же значение, что и `FRONTEND_URL`). Не путайте: в Telegram указывается URL **фронта**, а не бэкенда.
 
-**Подробно:** когда и где указывать BACKEND_URL, FRONTEND_URL, какой URL вставить в Telegram и как устранить ошибку 502 — см. **[docs/URL_AND_DEPLOY.md](docs/URL_AND_DEPLOY.md)**.
+**Подробно:** когда и где указывать BACKEND_URL, FRONTEND_URL, какой URL вставить в Telegram и как устранить ошибку 502 — см. **[docs/URL_AND_DEPLOY.md](docs/URL_AND_DEPLOY.md)**.  
+**Деплой бота и бэкенда в облако:** пошаговая инструкция для **Amverum Cloud** — см. **[docs/DEPLOY_AMVERUM.md](docs/DEPLOY_AMVERUM.md)**.  
+**Деплой фронтенда (WebApp) в контейнере:** сборка и запуск Docker-образа с nginx — см. **[docs/DEPLOY_FRONTEND.md](docs/DEPLOY_FRONTEND.md)**.
 
 Функционал бота:
 
