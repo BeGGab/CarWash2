@@ -1,0 +1,10 @@
+# Конфигурация деплоя бэкенда на Amvera (окружение Python).
+# Бот работает по webhook: обновления приходят на /api/telegram/webhook.
+
+build:
+  language: python
+  python_version: "3.12"
+  install: pip install -r requirements.txt
+
+run:
+  web: uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}

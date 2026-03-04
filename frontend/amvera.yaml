@@ -1,0 +1,11 @@
+# Конфигурация деплоя фронтенда на Amverum без Docker (окружение Node)
+# Контекст сборки — папка frontend. Переменная BACKEND_URL — в настройках приложения.
+
+build:
+  language: node
+  node_version: "20"
+  install: npm ci
+  build: npm run build
+
+run:
+  web: npm run start

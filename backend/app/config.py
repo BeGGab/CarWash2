@@ -5,9 +5,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    app_name: str = "CarWash Aggregator"
-    backend_url: str = "http://localhost:8000"
-    frontend_url: str = "http://localhost:5173"
+    """Все значения загружаются из переменных окружения (в т.ч. из .env)."""
+
+    app_name: str = ""
+    backend_url: str = ""
+    frontend_url: str = ""
 
     @field_validator("backend_url", "frontend_url", mode="before")
     @classmethod
@@ -16,31 +18,24 @@ class Settings(BaseSettings):
             v = v.strip().rstrip("/")
         return v
 
-    # Доп. разрешённые origins для CORS (через запятую), например URL WebApp в Telegram
     cors_extra_origins: str = ""
+    database_url: str = ""
 
-    database_url: str = "postgresql+asyncpg://carwash:123456@localhost:5432/carwash"
+    default_city_name: Optional[str] = None
+    default_city_lat: Optional[float] = None
+    default_city_lon: Optional[float] = None
+    default_radius_km: float = 0.0
 
-    # Центральный город: геопозиция и радиус поиска от этой точки, если заданы системным администратором
-    default_city_name: Optional[str] = "Ростов на Дону"
-    default_city_lat: Optional[float] = 47.222109
-    default_city_lon: Optional[float] = 39.718813
-    default_radius_km: float = 25.0
+    telegram_bot_token: str = ""
+    system_admin_telegram_ids: List[int] = []
 
-    # Telegram / Bot
-    telegram_bot_token: str = "YOUR_TELEGRAM_BOT_TOKEN"
-    # ID системных администраторов (через запятую). Проверка при запуске бота и в API.
-    system_admin_telegram_ids: List[int] = [1707332723, 138416420]
+    refund_hours_before_start: int = 0
 
-    # Отмена: авто-возврат предоплаты, если пользователь отменил бронь не менее чем за N часов до начала
-    refund_hours_before_start: int = 2
+    yookassa_shop_id: str = ""
+    yookassa_secret_key: str = ""
+    yookassa_currency: str = ""
 
-    # YooKassa
-    yookassa_shop_id: str = "1290986"
-    yookassa_secret_key: str = "test_bzj7Xe4-acY1okaDXimKi3iaBGw4xQxFKXcA-5mKstY"
-    yookassa_currency: str = "RUB"
-
-    aggregator_commission_percent: float = 5.0
+    aggregator_commission_percent: float = 0.0
 
     @field_validator("system_admin_telegram_ids", mode="before")
     @classmethod
@@ -52,7 +47,6 @@ class Settings(BaseSettings):
         s = str(v).strip()
         if not s:
             return []
-        # Поддержка вида "123,456" или "[123, 456]" из .env
         if s.startswith("["):
             s = s[1:]
         if s.endswith("]"):

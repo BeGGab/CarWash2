@@ -1,0 +1,3 @@
+# Сборка уже выполняется в build step. Запуск: запись config.json и раздача статики.
+# PORT задаётся Amverum.
+web: npm run start

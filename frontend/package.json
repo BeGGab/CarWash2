@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "write-config": "node scripts/write-config.cjs",
+    "start": "node scripts/write-config.cjs && npx serve -s dist -l ${PORT:-80}"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -17,6 +19,7 @@
     "qrcode.react": "^3.1.0"
   },
   "devDependencies": {
+    "serve": "^14.2.4",
     "@vitejs/plugin-react-swc": "^3.7.0",
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.35",

@@ -113,7 +113,7 @@ docker run -d \
 2. **Бэкенд:** в переменных окружения приложения бэкенда задайте **`FRONTEND_URL`** = этот же URL (CORS и редирект после оплаты).
 3. **ЮKassa:** возврат после оплаты — на этот URL, например `https://ваш-url/payment-success`.
 
-Подробнее про бэкенд и общую схему см. [docs/DEPLOY_AMVERUM.md](DEPLOY_AMVERUM.md).
+Подробнее про бэкенд и общую схему см. [docs/DEPLOY_AMVERA_PYTHON_NODE.md](DEPLOY_AMVERA_PYTHON_NODE.md) и [docs/DEPLOY_AMVERA_DOCKER.md](DEPLOY_AMVERA_DOCKER.md).
 
 ---
 

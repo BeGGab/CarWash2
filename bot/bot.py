@@ -12,6 +12,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
+from fastapi import APIRouter, Request, Response
 
 from backend.app.config import settings
 
@@ -740,7 +741,38 @@ async def handle_my_bookings(message: Message) -> None:
     )
 
 
-async def main() -> None:
+def get_webhook_router() -> APIRouter:
+    """Роутер для приёма обновлений Telegram по webhook (POST)."""
+    router = APIRouter(prefix="/telegram", tags=["telegram"])
+
+    @router.post("/webhook")
+    async def telegram_webhook(request: Request) -> Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return Response(status_code=400)
+        await dp.feed_webhook_update(bot, body)
+        return Response(status_code=200)
+
+    return router
+
+
+async def setup_webhook(base_url: str) -> None:
+    """Устанавливает webhook для бота. base_url — публичный URL бэкенда без слэша в конце."""
+    url = f"{base_url.rstrip('/')}/api/telegram/webhook"
+    await bot.delete_webhook()
+    await bot.set_webhook(url)
+    logging.info("Telegram webhook установлен: %s", url)
+
+
+async def teardown_webhook() -> None:
+    """Снимает webhook при остановке приложения."""
+    await bot.delete_webhook()
+    logging.info("Telegram webhook снят.")
+
+
+async def main_polling() -> None:
+    """Запуск бота в режиме long polling (для локальной разработки)."""
     logging.basicConfig(level=logging.INFO)
     if not settings.system_admin_telegram_ids:
         logging.warning(
@@ -750,7 +782,6 @@ async def main() -> None:
     else:
         logging.info("Системные администраторы: %s", sorted(settings.system_admin_telegram_ids))
 
-    # Проверка доступности бэкенда (избегаем 502 при запросах)
     try:
         async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             r = await client.get(f"{settings.backend_url.rstrip('/')}/health")
@@ -758,14 +789,13 @@ async def main() -> None:
             logging.info("Бэкенд доступен: %s", settings.backend_url)
         else:
             logging.warning(
-                "Бэкенд вернул %s по адресу %s. Убедитесь, что туннель для BACKEND_URL ведёт на порт 8000 (uvicorn), а не на 5173 (фронт).",
+                "Бэкенд вернул %s по адресу %s.",
                 r.status_code,
                 settings.backend_url,
             )
     except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
         logging.warning(
-            "Бэкенд недоступен (%s). BACKEND_URL=%s. "
-            "Для туннеля: поднимите отдельный туннель на порт 8000 (uvicorn), укажите его URL в .env как BACKEND_URL. Запустите uvicorn до запуска бота.",
+            "Бэкенд недоступен (%s). BACKEND_URL=%s.",
             e.__class__.__name__,
             settings.backend_url,
         )
@@ -774,5 +804,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main_polling())
 

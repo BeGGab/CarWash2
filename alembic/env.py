@@ -1,6 +1,7 @@
 import asyncio
 from logging.config import fileConfig
 
+from backend.app.config import settings
 from backend.app.db import Base
 from backend.app.models import *
 
@@ -26,6 +27,12 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
+
+def get_url() -> str:
+    """URL БД из переменной окружения DATABASE_URL (.env)."""
+    return settings.database_url or config.get_main_option("sqlalchemy.url", "")
+
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -44,7 +51,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -57,14 +64,11 @@ def run_migrations_offline() -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
+    """Run migrations in 'online' mode. Использует DATABASE_URL из .env."""
+    section = config.get_section(config.config_ini_section, {})
+    section["sqlalchemy.url"] = get_url()
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
